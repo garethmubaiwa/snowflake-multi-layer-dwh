@@ -1,0 +1,24 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# Airflow specifics
+logs/
+airflow-webserver.pid
+airflow.db
+airflow.cfg
+webserver_config.py
+
+# Docker and Environment variables
+.env
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
