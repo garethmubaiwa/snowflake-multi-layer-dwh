@@ -3,11 +3,9 @@ Procedure to load raw data into the bronze layer
 Procedure to process silver layer (staging) 
     - Merge passengers (deduplication)
     - Insert bookings (append-only)
-    - FIXED: added flight_id, price to staging_flight_bookings
 Procedure to process gold layer (core)
-    - Passenger bookings (count)
-    - Flight revenue (sum of price)
-    - Audit logging (insert into audit_log)
+    - Build dimensions and fact table
+    - Audit logging
 */
 
 -- procedure 1: load raw data
@@ -23,7 +21,9 @@ BEGIN
         TYPE = 'CSV',
         SKIP_HEADER = 1,
         FIELD_OPTIONALLY_ENCLOSED_BY = '"'
-    );
+    )
+    ON_ERROR = 'CONTINUE'
+    FORCE = FALSE;  -- FIX
 
     COMMIT;
 
@@ -42,36 +42,85 @@ DECLARE
 BEGIN
 
     BEGIN TRANSACTION;
-    -- Create a temporary table to hold the new stream data
+
     CREATE OR REPLACE TEMP TABLE tmp_stream AS
     SELECT *
     FROM raw.raw_to_staging_stream
     WHERE metadata$action = 'INSERT';
 
-    -- Passengers (FIXED: added passenger_id to staging_passengers)
+    -- Passengers
     MERGE INTO staging.staging_passengers t
     USING (
-        SELECT passenger_id, first_name, last_name
+        SELECT 
+            passenger_id, 
+            first_name, 
+            last_name,
+            gender,
+            age,
+            nationality
         FROM tmp_stream
+        WHERE passenger_id IS NOT NULL   
     ) s
     ON t.passenger_id = s.passenger_id
     WHEN NOT MATCHED THEN
-        INSERT (passenger_id, first_name, last_name)
-        VALUES (s.passenger_id, s.first_name, s.last_name);
+        INSERT (
+            passenger_id, 
+            first_name, 
+            last_name,
+            gender,
+            age,
+            nationality
+        )
+        VALUES (
+            s.passenger_id, 
+            s.first_name, 
+            s.last_name,
+            s.gender,
+            s.age,
+            s.nationality
+        );
 
-    -- Bookings (FIXED: added flight_id, price)
+    -- Airports
+    MERGE INTO staging.staging_airports t
+    USING (
+        SELECT 
+            airport_name,
+            airport_country_code,
+            country_name,
+            airport_continent
+        FROM tmp_stream
+    ) s
+    ON t.airport_name = s.airport_name
+    WHEN NOT MATCHED THEN
+        INSERT (
+            airport_name,
+            country_code,
+            country_name,
+            continent
+        )
+        VALUES (
+            s.airport_name,
+            s.airport_country_code,
+            s.country_name,
+            s.airport_continent
+        );
+
+    -- Bookings
     INSERT INTO staging.staging_flight_bookings (
-        booking_id,
         passenger_id,
-        flight_id,
-        price
+        airport_name,
+        departure_date,
+        flight_status,
+        ticket_type
     )
     SELECT
-        booking_id,
         passenger_id,
-        flight_id,
-        price
-    FROM tmp_stream;
+        airport_name,
+        TRY_TO_DATE(departure_date),   
+        flight_status,
+        ticket_type
+    FROM tmp_stream
+    WHERE passenger_id IS NOT NULL;  
 
     COMMIT;
 
@@ -96,49 +145,77 @@ BEGIN
 
     BEGIN TRANSACTION;
 
-    -- Passenger bookings
-    MERGE INTO core.fact_passenger_bookings t
+    -- dim_passengers
+    MERGE INTO core.dim_passengers t
     USING (
-        SELECT passenger_id, COUNT(*) AS total_bookings
-        FROM staging.staging_flight_bookings
-        GROUP BY passenger_id
+        SELECT DISTINCT 
+            passenger_id,
+            first_name || ' ' || last_name AS full_name,
+            nationality
+        FROM staging.staging_passengers
     ) s
     ON t.passenger_id = s.passenger_id
-    WHEN MATCHED THEN
-        UPDATE SET total_bookings = s.total_bookings
     WHEN NOT MATCHED THEN
-        INSERT (passenger_id, total_bookings)
-        VALUES (s.passenger_id, s.total_bookings);
+        INSERT (passenger_id, full_name, nationality)
+        VALUES (s.passenger_id, s.full_name, s.nationality);
 
-    -- Flight revenue
-    MERGE INTO core.fact_flight_revenue t
+    -- dim_airports
+    MERGE INTO core.dim_airports t
     USING (
-        SELECT flight_id, SUM(price) AS total_revenue
-        FROM staging.staging_flight_bookings
-        GROUP BY flight_id
+        SELECT DISTINCT
+            airport_name,
+            country_name,
+            continent
+        FROM staging.staging_airports
     ) s
-    ON t.flight_id = s.flight_id
-    WHEN MATCHED THEN
-        UPDATE SET total_revenue = s.total_revenue
+    ON t.airport_name = s.airport_name
     WHEN NOT MATCHED THEN
-        INSERT (flight_id, total_revenue)
-        VALUES (s.flight_id, s.total_revenue);
+        INSERT (airport_name, country_name, continent)
+        VALUES (s.airport_name, s.country_name, s.continent);
+
+    -- fact_bookings
+    INSERT INTO core.fact_bookings (
+        passenger_key,
+        airport_key,
+        departure_date,
+        flight_status,
+        ticket_type
+    )
+    SELECT
+        p.passenger_key,
+        a.airport_key,
+        b.departure_date,
+        b.flight_status,
+        b.ticket_type
+    FROM staging.staging_flight_bookings b
+    JOIN core.dim_passengers p 
+        ON b.passenger_id = p.passenger_id
+    JOIN core.dim_airports a 
+        ON b.airport_name = a.airport_name
+    WHERE NOT EXISTS (
+        SELECT 1 
+        FROM core.fact_bookings f
+        WHERE f.passenger_key = p.passenger_key
+          AND f.airport_key = a.airport_key
+          AND f.departure_date = b.departure_date
+    );
 
     -- Audit
+    SELECT COUNT(*) INTO total_rows
+    FROM staging.staging_flight_bookings;
+
     INSERT INTO audit.audit_log (
         procedure_name,
-        rows_affected,
-        created_at
+        rows_affected
     )
     VALUES (
         'process_gold_layer',
-        total_rows,
-        CURRENT_TIMESTAMP()
+        total_rows
     );
 
     COMMIT;
 
-    RETURN 'Gold processed successfully';
+    RETURN 'Gold layer processed successfully';
 
 EXCEPTION
     WHEN OTHER THEN
