@@ -36,6 +36,8 @@ CREATE TABLE raw_airline_data (
     passenger_status VARCHAR
 );
 
+create or replace stream raw_to_staging_stream on table raw_airline_data;
+
 -- Stage 2: Staging (Silver)
 USE SCHEMA STAGING;
 create or replace table staging_passengers(
@@ -62,6 +64,11 @@ create or replace table staging_flight_bookings(
     ticket_type varchar
 );
 
+-- Streams for Staging to Core
+create or replace stream staging_passengers_stream on table staging_passengers;
+create or replace stream staging_airports_stream on table staging_airports;
+create or replace stream staging_flight_bookings_stream on table staging_flight_bookings;
+
 -- Stage 3: Core (Gold)
 USE SCHEMA CORE;
 create or replace table dim_passengers (
@@ -87,6 +94,14 @@ create or replace table fact_bookings (
     ticket_type VARCHAR
 );
 
+create or replace table agg_daily_booking_metrics (
+    departure_date  DATE,
+    flight_status   VARCHAR,
+    ticket_type     VARCHAR,
+    total_bookings  INT,
+    last_updated    TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+);
+
 -- Stage 4: Audit
 USE SCHEMA AUDIT;
 
@@ -101,6 +116,3 @@ create or replace table user_continents (
     role_name VARCHAR,
     continent_access VARCHAR
 );
-
--- Stream for Raw to Staging
-create or replace stream raw_to_staging_stream ON TABLE raw_airline_data;
