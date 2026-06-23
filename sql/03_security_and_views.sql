@@ -23,7 +23,7 @@ select
     f.*, 
     a.continent 
 from fact_bookings f
-join dim_airports a on f.airport_key = a.airport_key
+join dim_airports a on f.airport_key = a.airport_key;
 
 alter view fact_bookings_secure_view
 add row access policy audit.continent_access_policy on continent;
