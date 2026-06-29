@@ -25,6 +25,10 @@ RETURNS STRING
 LANGUAGE SQL
 AS
 $$
+DECLARE
+    passenger_rows  INT DEFAULT 0;
+    airport_rows    INT DEFAULT 0;
+    booking_rows    INT DEFAULT 0;
 BEGIN
     BEGIN TRANSACTION;
 
