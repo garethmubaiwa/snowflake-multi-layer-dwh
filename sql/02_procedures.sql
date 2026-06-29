@@ -41,6 +41,7 @@ BEGIN
         WHERE passenger_id IS NOT NULL   
     ) s
     ON t.passenger_id = s.passenger_id
+    
     WHEN MATCHED THEN 
         UPDATE SET 
             t.first_name = s.first_name,
@@ -48,9 +49,12 @@ BEGIN
             t.gender = s.gender,
             t.age = s.age,
             t.nationality = s.nationality
+    
     WHEN NOT MATCHED THEN
         INSERT (passenger_id, first_name, last_name, gender, age, nationality)
         VALUES (s.passenger_id, s.first_name, s.last_name, s.gender, s.age, s.nationality);
+
+    passenger_rows := SQLROWCOUNT; 
 
     -- Airports
     MERGE INTO staging.staging_airports t
@@ -59,14 +63,18 @@ BEGIN
         FROM tmp_stream
     ) s
     ON t.airport_name = s.airport_name
+    
     WHEN MATCHED THEN
         UPDATE SET
             t.country_code = s.airport_country_code,
             t.country_name = s.country_name,
             t.continent = s.airport_continent
+
     WHEN NOT MATCHED THEN
         INSERT (airport_name, country_code, country_name, continent)
         VALUES (s.airport_name, s.airport_country_code, s.country_name, s.airport_continent);
+
+    airport_rows := SQLROWCOUNT;
 
     -- Bookings (Append Only from Stream)
     INSERT INTO staging.staging_flight_bookings (
@@ -79,10 +87,20 @@ BEGIN
         flight_status,
         ticket_type
     FROM tmp_stream
-    WHERE passenger_id IS NOT NULL;  
+    WHERE passenger_id IS NOT NULL;
+
+    booking_rows := SQLROWCOUNT;
+
+    INSERT INTO audit.audit_log (procedure_name, rows_affected)
+    VALUES
+        ('process_silver_layer:passengers', passenger_rows),
+        ('process_silver_layer:airports',   airport_rows),
+        ('process_silver_layer:bookings',   booking_rows);
 
     COMMIT;
-    RETURN 'OK';
+    RETURN 'Silver OK — passengers: ' || passenger_rows 
+        || ', airports: ' || airport_rows 
+        || ', bookings: ' || booking_rows;
 
 EXCEPTION
     WHEN OTHER THEN
@@ -113,10 +131,12 @@ BEGIN
         WHERE metadata$action = 'INSERT'
     ) s
     ON t.passenger_id = s.passenger_id
+
     WHEN MATCHED THEN
         UPDATE SET 
-            t.full_name = s.full_name,
-            t.nationality = s.nationality
+            t.full_name    = s.full_name,
+            t.nationality  = s.nationality
+
     WHEN NOT MATCHED THEN
         INSERT (passenger_id, full_name, nationality)
         VALUES (s.passenger_id, s.full_name, s.nationality);
@@ -129,10 +149,12 @@ BEGIN
         WHERE metadata$action = 'INSERT'
     ) s
     ON t.airport_name = s.airport_name
+
     WHEN MATCHED THEN
         UPDATE SET 
             t.country_name = s.country_name,
             t.continent = s.continent
+    
     WHEN NOT MATCHED THEN
         INSERT (airport_name, country_name, continent)
         VALUES (s.airport_name, s.country_name, s.continent);
